@@ -1,4 +1,4 @@
-name: 🖥️ Windows RDP - fenzz
+name: 🖥️ Windows RDP - RDO
 
 on:
   workflow_dispatch:
@@ -71,34 +71,32 @@ jobs:
           Write-Host "✅ Cleanup selesai!" -ForegroundColor Green
 
       # ─────────────────────────────────────────────
-      # 2. BUAT USER fenzz + AKTIFKAN RDP
+      # 2. BUAT USER RDO + AKTIFKAN RDP  ← FIXED
       # ─────────────────────────────────────────────
-      - name: 👤 Buat User fenzz & Aktifkan RDP
+      - name: 👤 Buat User RDO & Aktifkan RDP
         shell: powershell
         env:
-          # Password disimpan aman via env variable
-          RDP_PASSWORD: "Fenzz@Rdp2024!"
+          RDP_PASSWORD: "W1ndows@RDP2024!"
         run: |
-          $username = "fenzz"
+          $username = "RDP"
           $password = $env:RDP_PASSWORD
-          $secPassword = ConvertTo-SecureString $password -AsPlainText -Force
 
-          # Hapus user lama kalau ada, biar fresh
-          Remove-LocalUser -Name $username -ErrorAction SilentlyContinue
+          # Hapus user lama kalau ada
+          net user $username /delete 2>&1 | Out-Null
 
-          # Buat user baru
-          New-LocalUser -Name $username `
-                        -Password $secPassword `
-                        -FullName "fenzz" `
-                        -Description "RDP User" `
-                        -PasswordNeverExpires `
-                        -UserMayNotChangePassword
+          # ✅ FIX: Gunakan "net user" bukan New-LocalUser
+          # New-LocalUser sering InvalidPasswordException di GitHub Actions runner
+          net user $username "$password" /add /fullname:"RDO" /comment:"RDP User" /expires:never /passwordchg:no
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ Gagal membuat user!" -ForegroundColor Red
+            exit 1
+          }
 
           Write-Host "✅ User $username berhasil dibuat!" -ForegroundColor Green
 
           # Tambah ke group Admin & RDP
-          Add-LocalGroupMember -Group "Administrators"       -Member $username -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+          net localgroup Administrators $username /add 2>&1 | Out-Null
+          net localgroup "Remote Desktop Users" $username /add 2>&1 | Out-Null
 
           # Aktifkan RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
@@ -108,7 +106,7 @@ jobs:
 
           # Buka firewall
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          netsh advfirewall firewall add rule name="RDP-fenzz" protocol=TCP dir=in localport=3389 action=allow | Out-Null
+          netsh advfirewall firewall add rule name="RDP-RDO" protocol=TCP dir=in localport=3389 action=allow | Out-Null
 
           # Restart service RDP
           Set-Service -Name "TermService" -StartupType Automatic
@@ -135,7 +133,7 @@ jobs:
 
           $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
           & $tsExe up --authkey="${{ github.event.inputs.tailscale_authkey }}" `
-                      --hostname="rdp-fenzz" `
+                      --hostname="rdp-RDO" `
                       --accept-routes
 
           Start-Sleep -Seconds 8
@@ -146,8 +144,8 @@ jobs:
           Write-Host "║        🖥️  RDP SIAP DIGUNAKAN!        ║" -ForegroundColor Green
           Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Green
           Write-Host "║  Tailscale IP : $tsIP"                   -ForegroundColor White
-          Write-Host "║  Username     : fenzz"                   -ForegroundColor White
-          Write-Host "║  Password     : Fenzz@Rdp2024!"          -ForegroundColor White
+          Write-Host "║  Username     : RDP"                   -ForegroundColor White
+          Write-Host "║  Password     : W1ndows@RDP2024!"          -ForegroundColor White
           Write-Host "║  Port RDP     : 3389"                    -ForegroundColor White
           Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Green
           Write-Host "║  Buka 'mstsc' lalu masuk IP Tailscale║" -ForegroundColor Cyan
@@ -163,4 +161,3 @@ jobs:
           $seconds = $minutes * 60
           Write-Host "Sesi aktif $minutes menit. Tutup workflow kalau sudah selesai." -ForegroundColor Yellow
           Start-Sleep -Seconds $seconds
-          
