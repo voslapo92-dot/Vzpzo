@@ -3,11 +3,6 @@ name: 🖥️ Windows RDP - fenzz
 on:
   workflow_dispatch:
     inputs:
-      rdp_password:
-        description: "Password RDP untuk user fenzz"
-        required: true
-        default: "Fenzz@2024!"
-        type: string
       tailscale_authkey:
         description: "Tailscale Auth Key (dari tailscale.com/settings/keys)"
         required: true
@@ -25,9 +20,9 @@ jobs:
 
     steps:
       # ─────────────────────────────────────────────
-      # 1. BERSIH-BERSIH DISK (~50GB lebih lega)
+      # 1. BERSIH-BERSIH DISK
       # ─────────────────────────────────────────────
-      - name: 🧹 Hapus Software Tidak Perlu (Bebaskan ~50GB)
+      - name: 🧹 Hapus Software Tidak Perlu
         shell: powershell
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
@@ -80,34 +75,46 @@ jobs:
       # ─────────────────────────────────────────────
       - name: 👤 Buat User fenzz & Aktifkan RDP
         shell: powershell
+        env:
+          # Password disimpan aman via env variable
+          RDP_PASSWORD: "Fenzz@Rdp2024!"
         run: |
           $username = "fenzz"
-          $password  = "${{ github.event.inputs.rdp_password }}"
+          $password = $env:RDP_PASSWORD
           $secPassword = ConvertTo-SecureString $password -AsPlainText -Force
 
-          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
-            Write-Host "User $username sudah ada, update password..." -ForegroundColor Yellow
-            Set-LocalUser -Name $username -Password $secPassword
-          } else {
-            New-LocalUser -Name $username -Password $secPassword -FullName "fenzz" -Description "RDP User" -PasswordNeverExpires
-            Write-Host "User $username berhasil dibuat!" -ForegroundColor Green
-          }
+          # Hapus user lama kalau ada, biar fresh
+          Remove-LocalUser -Name $username -ErrorAction SilentlyContinue
 
+          # Buat user baru
+          New-LocalUser -Name $username `
+                        -Password $secPassword `
+                        -FullName "fenzz" `
+                        -Description "RDP User" `
+                        -PasswordNeverExpires `
+                        -UserMayNotChangePassword
+
+          Write-Host "✅ User $username berhasil dibuat!" -ForegroundColor Green
+
+          # Tambah ke group Admin & RDP
           Add-LocalGroupMember -Group "Administrators"       -Member $username -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
 
+          # Aktifkan RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                            -Name "fDenyTSConnections" -Value 0 -Type DWord
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                            -Name "UserAuthentication" -Value 0 -Type DWord
 
+          # Buka firewall
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          netsh advfirewall firewall add rule name="RDP" protocol=TCP dir=in localport=3389 action=allow | Out-Null
+          netsh advfirewall firewall add rule name="RDP-fenzz" protocol=TCP dir=in localport=3389 action=allow | Out-Null
 
+          # Restart service RDP
           Set-Service -Name "TermService" -StartupType Automatic
           Restart-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
 
-          Write-Host "✅ RDP siap! Username: $username" -ForegroundColor Green
+          Write-Host "✅ RDP aktif! User: $username | Pass: $password" -ForegroundColor Green
 
       # ─────────────────────────────────────────────
       # 3. INSTALL & CONNECT TAILSCALE
@@ -120,10 +127,10 @@ jobs:
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
                             -OutFile $installer -UseBasicParsing
 
-          Write-Host "Install Tailscale (silent)..." -ForegroundColor Cyan
+          Write-Host "Install Tailscale..." -ForegroundColor Cyan
           Start-Process -FilePath $installer -ArgumentList "/S" -Wait -NoNewWindow
 
-          Start-Sleep -Seconds 3
+          Start-Sleep -Seconds 5
           Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
 
           $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
@@ -138,13 +145,12 @@ jobs:
           Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Green
           Write-Host "║        🖥️  RDP SIAP DIGUNAKAN!        ║" -ForegroundColor Green
           Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Green
-          Write-Host "║  Tailscale IP : $tsIP" -ForegroundColor White
-          Write-Host "║  Username     : fenzz" -ForegroundColor White
-          Write-Host "║  Password     : (sesuai input kamu)" -ForegroundColor White
-          Write-Host "║  Port RDP     : 3389" -ForegroundColor White
+          Write-Host "║  Tailscale IP : $tsIP"                   -ForegroundColor White
+          Write-Host "║  Username     : fenzz"                   -ForegroundColor White
+          Write-Host "║  Password     : Fenzz@Rdp2024!"          -ForegroundColor White
+          Write-Host "║  Port RDP     : 3389"                    -ForegroundColor White
           Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Green
-          Write-Host "║  Buka 'Remote Desktop Connection'    ║" -ForegroundColor Cyan
-          Write-Host "║  masukkan IP Tailscale di atas       ║" -ForegroundColor Cyan
+          Write-Host "║  Buka 'mstsc' lalu masuk IP Tailscale║" -ForegroundColor Cyan
           Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Green
 
       # ─────────────────────────────────────────────
@@ -155,6 +161,6 @@ jobs:
         run: |
           $minutes = [int]"${{ github.event.inputs.session_time }}"
           $seconds = $minutes * 60
-          Write-Host "Sesi akan aktif selama $minutes menit..." -ForegroundColor Yellow
+          Write-Host "Sesi aktif $minutes menit. Tutup workflow kalau sudah selesai." -ForegroundColor Yellow
           Start-Sleep -Seconds $seconds
           
