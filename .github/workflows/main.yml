@@ -30,44 +30,33 @@ jobs:
       - name: 🧹 Hapus Software Tidak Perlu (Bebaskan ~50GB)
         shell: powershell
         run: |
+          $ErrorActionPreference = 'SilentlyContinue'
+
           Write-Host "===== DISK SEBELUM CLEANUP =====" -ForegroundColor Cyan
           Get-PSDrive C | Select-Object @{N='Used(GB)';E={[math]::Round($_.Used/1GB,2)}}, @{N='Free(GB)';E={[math]::Round($_.Free/1GB,2)}}
 
           $toDelete = @(
-            # Android SDK
             "C:\Android",
             "C:\android-ndk*",
-            # Haskell / GHC
             "C:\ghc*",
             "C:\msys64",
-            # Julia
             "C:\julia*",
-            # Miniconda / Anaconda
             "C:\Miniconda*",
             "C:\ProgramData\Miniconda3",
-            # Strawberry Perl
             "C:\Strawberry",
-            # PostgreSQL
             "C:\Program Files\PostgreSQL",
-            # MongoDB
             "C:\Program Files\MongoDB",
-            # Boost C++
             "C:\local\boost*",
-            # Azure / Microsoft SDKs lama
             "C:\Program Files (x86)\Microsoft SDKs\Azure",
             "C:\Program Files (x86)\Windows Kits\10\Debuggers",
-            # Hosted Tool Cache (Python versi lama, Ruby, Go, Node lama)
             "C:\hostedtoolcache\windows\go\1.1*",
             "C:\hostedtoolcache\windows\go\1.20*",
             "C:\hostedtoolcache\windows\go\1.21*",
             "C:\hostedtoolcache\windows\Ruby",
             "C:\hostedtoolcache\windows\PyPy",
             "C:\hostedtoolcache\windows\CodeQL",
-            # LLVM / Clang
             "C:\Program Files\LLVM",
-            # R Language
             "C:\Program Files\R",
-            # SQL Server lama
             "C:\Program Files\Microsoft SQL Server\150\LocalDB"
           )
 
@@ -81,18 +70,10 @@ jobs:
             }
           }
 
-          # Hapus via winget (optional, diam-diam)
-          $appsToRemove = @(
-            "Microsoft.VisualStudio.2019.BuildTools",
-            "Microsoft.VisualStudio.2019.Enterprise"
-          )
-          foreach ($app in $appsToRemove) {
-            winget uninstall --id $app --silent --accept-source-agreements 2>$null
-          }
-
           Write-Host ""
           Write-Host "===== DISK SETELAH CLEANUP =====" -ForegroundColor Green
           Get-PSDrive C | Select-Object @{N='Used(GB)';E={[math]::Round($_.Used/1GB,2)}}, @{N='Free(GB)';E={[math]::Round($_.Free/1GB,2)}}
+          Write-Host "✅ Cleanup selesai!" -ForegroundColor Green
 
       # ─────────────────────────────────────────────
       # 2. BUAT USER fenzz + AKTIFKAN RDP
@@ -104,7 +85,6 @@ jobs:
           $password  = "${{ github.event.inputs.rdp_password }}"
           $secPassword = ConvertTo-SecureString $password -AsPlainText -Force
 
-          # Buat user lokal
           if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
             Write-Host "User $username sudah ada, update password..." -ForegroundColor Yellow
             Set-LocalUser -Name $username -Password $secPassword
@@ -113,25 +93,20 @@ jobs:
             Write-Host "User $username berhasil dibuat!" -ForegroundColor Green
           }
 
-          # Masukkan ke group Administrators & Remote Desktop Users
-          Add-LocalGroupMember -Group "Administrators"          -Member $username -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users"    -Member $username -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Administrators"       -Member $username -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
 
-          # Aktifkan RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                            -Name "fDenyTSConnections" -Value 0 -Type DWord
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                            -Name "UserAuthentication" -Value 0 -Type DWord
 
-          # Buka firewall RDP
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
           netsh advfirewall firewall add rule name="RDP" protocol=TCP dir=in localport=3389 action=allow | Out-Null
 
-          # Restart service RDP
           Set-Service -Name "TermService" -StartupType Automatic
           Restart-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
 
-          Write-Host ""
           Write-Host "✅ RDP siap! Username: $username" -ForegroundColor Green
 
       # ─────────────────────────────────────────────
@@ -148,20 +123,16 @@ jobs:
           Write-Host "Install Tailscale (silent)..." -ForegroundColor Cyan
           Start-Process -FilePath $installer -ArgumentList "/S" -Wait -NoNewWindow
 
-          # Pastikan Tailscale jalan
           Start-Sleep -Seconds 3
           Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
 
-          # Konek ke network Tailscale
           $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
           & $tsExe up --authkey="${{ github.event.inputs.tailscale_authkey }}" `
                       --hostname="rdp-fenzz" `
                       --accept-routes
 
-          # Tunggu IP tersedia
           Start-Sleep -Seconds 8
-          $tsIP = & $tsExe ip --4 2>$null
-          $tsIP = $tsIP.Trim()
+          $tsIP = (& $tsExe ip --4 2>$null).Trim()
 
           Write-Host ""
           Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Green
@@ -185,5 +156,5 @@ jobs:
           $minutes = [int]"${{ github.event.inputs.session_time }}"
           $seconds = $minutes * 60
           Write-Host "Sesi akan aktif selama $minutes menit..." -ForegroundColor Yellow
-          Write-Host "Tutup workflow ini jika sudah selesai." -ForegroundColor Yellow
           Start-Sleep -Seconds $seconds
+          
