@@ -1,163 +1,92 @@
-name: 🖥️ Windows RDP - RDO
+name: Windows 11 ARM RDP with Tailscale
 
 on:
   workflow_dispatch:
     inputs:
       tailscale_authkey:
-        description: "Tailscale Auth Key (dari tailscale.com/settings/keys)"
+        description: 'Tailscale Auth Key (tskey-auth-...)'
         required: true
-        type: string
-      session_time:
-        description: "Durasi sesi (menit, max 360)"
-        required: false
-        default: "360"
         type: string
 
 jobs:
-  windows-rdp:
-    runs-on: windows-latest
+  rdp:
+    runs-on: windows-11-arm
     timeout-minutes: 360
 
     steps:
-      # ─────────────────────────────────────────────
-      # 1. BERSIH-BERSIH DISK
-      # ─────────────────────────────────────────────
-      - name: 🧹 Hapus Software Tidak Perlu
-        shell: powershell
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ inputs.tailscale_authkey }}
+          version: latest
+          args: --hostname=gha-win11-arm-rdp
+
+      - name: Get Tailscale IP
+        shell: pwsh
         run: |
-          $ErrorActionPreference = 'SilentlyContinue'
+          $ip = tailscale ip -4
+          Write-Host "==========================================="
+          Write-Host " Tailscale IP   : $ip"
+          Write-Host " Username       : runneradmin"
+          Write-Host " Hostname       : gha-win11-arm-rdp"
+          Write-Host "==========================================="
+          echo "TAILSCALE_IP=$ip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          Write-Host "===== DISK SEBELUM CLEANUP =====" -ForegroundColor Cyan
-          Get-PSDrive C | Select-Object @{N='Used(GB)';E={[math]::Round($_.Used/1GB,2)}}, @{N='Free(GB)';E={[math]::Round($_.Free/1GB,2)}}
+      - name: Enable RDP
+        shell: pwsh
+        run: |
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-          $toDelete = @(
-            "C:\Android",
-            "C:\android-ndk*",
-            "C:\ghc*",
-            "C:\msys64",
-            "C:\julia*",
-            "C:\Miniconda*",
-            "C:\ProgramData\Miniconda3",
-            "C:\Strawberry",
-            "C:\Program Files\PostgreSQL",
-            "C:\Program Files\MongoDB",
-            "C:\local\boost*",
-            "C:\Program Files (x86)\Microsoft SDKs\Azure",
-            "C:\Program Files (x86)\Windows Kits\10\Debuggers",
-            "C:\hostedtoolcache\windows\go\1.1*",
-            "C:\hostedtoolcache\windows\go\1.20*",
-            "C:\hostedtoolcache\windows\go\1.21*",
-            "C:\hostedtoolcache\windows\Ruby",
-            "C:\hostedtoolcache\windows\PyPy",
-            "C:\hostedtoolcache\windows\CodeQL",
-            "C:\Program Files\LLVM",
-            "C:\Program Files\R",
-            "C:\Program Files\Microsoft SQL Server\150\LocalDB"
-          )
+          # Firewall rule (hanya Tailscale subnet 100.64.0.0/10)
+          New-NetFirewallRule -DisplayName "RDP-Tailscale" -Direction Inbound -Protocol TCP -LocalPort 3389 -Action Allow -RemoteAddress 100.64.0.0/10
 
-          foreach ($path in $toDelete) {
-            $expanded = Get-Item $path -ErrorAction SilentlyContinue
-            if ($expanded) {
-              foreach ($item in $expanded) {
-                Write-Host "Menghapus: $($item.FullName)" -ForegroundColor Yellow
-                Remove-Item -Path $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
-              }
-            }
+          # Start RDP service
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service TermService
+
+      - name: Set Password for runneradmin
+        shell: pwsh
+        run: |
+          $password = "P@ssw0rd!$(Get-Random -Minimum 1000 -Maximum 9999)"
+          net user runneradmin "$password"
+          Write-Host "==========================================="
+          Write-Host " Password       : $password"
+          Write-Host "==========================================="
+          echo "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Create Connection Info
+        shell: pwsh
+        run: |
+          $info = @"
+
+          ╔══════════════════════════════════════════════════════╗
+          ║         WINDOWS 11 ARM RDP - READY                   ║
+          ╠══════════════════════════════════════════════════════╣
+          ║  Host (Tailscale IP) : $env:TAILSCALE_IP
+          ║  Port                : 3389
+          ║  Username            : runneradmin
+          ║  Password            : $env:RDP_PASSWORD
+          ╠══════════════════════════════════════════════════════╣
+          ║  Pastikan device lokal sudah connect ke Tailnet      ║
+          ║  Tailscale yang sama!                                ║
+          ╚══════════════════════════════════════════════════════╝
+
+          "@
+          Write-Host $info -ForegroundColor Green
+
+      - name: Keep Alive
+        shell: pwsh
+        run: |
+          Write-Host "RDP session active. Menunggu hingga timeout (6 jam)..."
+          $elapsed = 0
+          while ($elapsed -lt 21600) {
+            Start-Sleep -Seconds 60
+            $elapsed += 60
+            $remaining = 21600 - $elapsed
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Remaining: $([math]::Floor($remaining/60)) minutes"
           }
-
-          Write-Host ""
-          Write-Host "===== DISK SETELAH CLEANUP =====" -ForegroundColor Green
-          Get-PSDrive C | Select-Object @{N='Used(GB)';E={[math]::Round($_.Used/1GB,2)}}, @{N='Free(GB)';E={[math]::Round($_.Free/1GB,2)}}
-          Write-Host "✅ Cleanup selesai!" -ForegroundColor Green
-
-      # ─────────────────────────────────────────────
-      # 2. BUAT USER RDO + AKTIFKAN RDP  ← FIXED
-      # ─────────────────────────────────────────────
-      - name: 👤 Buat User RDO & Aktifkan RDP
-        shell: powershell
-        env:
-          RDP_PASSWORD: "W1ndows@RDP2024!"
-        run: |
-          $username = "RDP"
-          $password = $env:RDP_PASSWORD
-
-          # Hapus user lama kalau ada
-          net user $username /delete 2>&1 | Out-Null
-
-          # ✅ FIX: Gunakan "net user" bukan New-LocalUser
-          # New-LocalUser sering InvalidPasswordException di GitHub Actions runner
-          net user $username "$password" /add /fullname:"RDO" /comment:"RDP User" /expires:never /passwordchg:no
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Gagal membuat user!" -ForegroundColor Red
-            exit 1
-          }
-
-          Write-Host "✅ User $username berhasil dibuat!" -ForegroundColor Green
-
-          # Tambah ke group Admin & RDP
-          net localgroup Administrators $username /add 2>&1 | Out-Null
-          net localgroup "Remote Desktop Users" $username /add 2>&1 | Out-Null
-
-          # Aktifkan RDP
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                           -Name "fDenyTSConnections" -Value 0 -Type DWord
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                           -Name "UserAuthentication" -Value 0 -Type DWord
-
-          # Buka firewall
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
-          netsh advfirewall firewall add rule name="RDP-RDO" protocol=TCP dir=in localport=3389 action=allow | Out-Null
-
-          # Restart service RDP
-          Set-Service -Name "TermService" -StartupType Automatic
-          Restart-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
-
-          Write-Host "✅ RDP aktif! User: $username | Pass: $password" -ForegroundColor Green
-
-      # ─────────────────────────────────────────────
-      # 3. INSTALL & CONNECT TAILSCALE
-      # ─────────────────────────────────────────────
-      - name: 🌐 Install Tailscale & Konek
-        shell: powershell
-        run: |
-          Write-Host "Download Tailscale..." -ForegroundColor Cyan
-          $installer = "$env:TEMP\tailscale-setup.exe"
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" `
-                            -OutFile $installer -UseBasicParsing
-
-          Write-Host "Install Tailscale..." -ForegroundColor Cyan
-          Start-Process -FilePath $installer -ArgumentList "/S" -Wait -NoNewWindow
-
-          Start-Sleep -Seconds 5
-          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-
-          $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
-          & $tsExe up --authkey="${{ github.event.inputs.tailscale_authkey }}" `
-                      --hostname="rdp-RDO" `
-                      --accept-routes
-
-          Start-Sleep -Seconds 8
-          $tsIP = (& $tsExe ip --4 2>$null).Trim()
-
-          Write-Host ""
-          Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Green
-          Write-Host "║        🖥️  RDP SIAP DIGUNAKAN!        ║" -ForegroundColor Green
-          Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Green
-          Write-Host "║  Tailscale IP : $tsIP"                   -ForegroundColor White
-          Write-Host "║  Username     : RDP"                   -ForegroundColor White
-          Write-Host "║  Password     : W1ndows@RDP2024!"          -ForegroundColor White
-          Write-Host "║  Port RDP     : 3389"                    -ForegroundColor White
-          Write-Host "╠══════════════════════════════════════╣" -ForegroundColor Green
-          Write-Host "║  Buka 'mstsc' lalu masuk IP Tailscale║" -ForegroundColor Cyan
-          Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Green
-
-      # ─────────────────────────────────────────────
-      # 4. JAGA SESI TETAP HIDUP
-      # ─────────────────────────────────────────────
-      - name: ⏳ Jaga Sesi Tetap Aktif
-        shell: powershell
-        run: |
-          $minutes = [int]"${{ github.event.inputs.session_time }}"
-          $seconds = $minutes * 60
-          Write-Host "Sesi aktif $minutes menit. Tutup workflow kalau sudah selesai." -ForegroundColor Yellow
-          Start-Sleep -Seconds $seconds
